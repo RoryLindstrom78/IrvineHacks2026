@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ASL Hand Capture</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+    body {
+        margin: 0;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+    }
+
+    #video, #canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+    }
+
+    #canvas {
+        pointer-events: none;
+    }
+
+    #controls {
+        position: relative;
+        z-index: 10;
+        background: white;
+        padding: 10px;
+    }
+</style>
+</head>
+
+<body>
+
+<div id="controls">
+    <select id="letterSelect">
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+        <option value="L">L</option>
+    </select>
+
+    <button onclick="captureSample()">Capture Sample</button>
+</div>
+
+<video id="video" width="640" height="480" autoplay></video>
+<canvas id="canvas" width="640" height="480"></canvas>
+
+<script>
+const videoElement = document.getElementById('video');
+const canvasElement = document.getElementById('canvas');
+const canvasCtx = canvasElement.getContext('2d');
+
+let latestLandmarks = null;
+
+// Create MediaPipe Hands instance
+const hands = new Hands({
+    locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }
+});
+
+hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.5
+});
+
+// Runs every frame
+hands.onResults((results) => {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        for (const landmarks of results.multiHandLandmarks) {
+
+            // Store latest landmarks
+            latestLandmarks = landmarks;
+
+            // Draw skeleton
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {
+                color: '#00FF00',
+                lineWidth: 2
+            });
+            drawLandmarks(canvasCtx, landmarks, {
+                color: '#FF0000',
+                lineWidth: 1
+            });
+        }
+    }
+
+    canvasCtx.restore();
+});
+
+// Set up webcam
+const camera = new Camera(videoElement, {
+    onFrame: async () => {
+        await hands.send({image: videoElement});
+    },
+    width: 640,
+    height: 480
+});
+
+camera.start();
+
+// Capture function
+async function captureSample() {
+    if (!latestLandmarks) {
+        alert("No hand detected!");
+        return;
+    }
+
+    const selectedLetter = document.getElementById("letterSelect").value;
+
+    // Normalize relative to wrist (landmark 0)
+    const wrist = latestLandmarks[0];
+    let flattened = [];
+
+    for (let i = 0; i < 21; i++) {
+        flattened.push(latestLandmarks[i].x - wrist.x);
+        flattened.push(latestLandmarks[i].y - wrist.y);
+        flattened.push(latestLandmarks[i].z - wrist.z);
+    }
+
+    try {
+        await fetch("http://localhost:5000/receive", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                features: flattened,
+                label: selectedLetter
+            })
+        });
+
+        console.log("Sent sample for letter:", selectedLetter);
+        alert("Sample saved for letter " + selectedLetter);
+
+    } catch (error) {
+        console.error("Error sending data:", error);
+        alert("Failed to send data. Is the Python server running?");
+    }
+}
+</script>
+
+</body>
+</html>
